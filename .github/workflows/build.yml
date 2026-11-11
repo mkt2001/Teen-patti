@@ -1,1 +1,98 @@
+name: Build Android APK and publish Release
 
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container:
+      image: barichello/godot-ci:4.2.2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Locate Godot project (extracted repo OR uploaded zip)
+        shell: bash
+        run: |
+          apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq unzip zip >/dev/null 2>&1 || true
+          PROJECT_DIR=""
+          if [ -f project.godot ]; then
+            PROJECT_DIR="."
+          else
+            FOUND=$(find . -name project.godot -not -path "./.git/*" -not -path "./_unzipped/*" | head -n 1 || true)
+            if [ -n "$FOUND" ]; then
+              PROJECT_DIR=$(dirname "$FOUND")
+            else
+              mkdir -p _unzipped
+              find . -iname "*.zip" -not -path "./.git/*" -not -path "./_unzipped/*" -print0 | while IFS= read -r -d '' z; do
+                echo "Extracting: $z"
+                d="_unzipped/$(basename "$z" | tr ' ' '_' | sed 's/\.[zZ][iI][pP]$//')"
+                mkdir -p "$d"
+                unzip -q -o "$z" -d "$d" || true
+              done
+              FOUND=$(find _unzipped -name project.godot | head -n 1 || true)
+              if [ -n "$FOUND" ]; then PROJECT_DIR=$(dirname "$FOUND"); fi
+            fi
+          fi
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: project.godot not found (upload the project zip or its extracted files)"
+            exit 1
+          fi
+          echo "Project dir: $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Prepare Godot + Android SDK settings
+        shell: bash
+        run: |
+          export HOME=/root
+          mkdir -p /root/.config/godot /root/.local/share/godot/export_templates
+          ls /root/.local/share/godot/export_templates || true
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/lib/android-sdk}}"
+          JAVA_DIR="${JAVA_HOME:-$(dirname "$(dirname "$(readlink -f "$(which javac || which java)")")")}"
+          KS=/root/debug.keystore
+          if [ ! -f "$KS" ]; then
+            keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android -keystore "$KS" -storepass android -dname "CN=Android Debug,O=Android,C=US" -validity 9999 -deststoretype pkcs12
+          fi
+          for f in editor_settings-4.tres editor_settings-4.2.tres; do
+            if ! grep -qs "android_sdk_path" "/root/.config/godot/$f"; then
+              cat > "/root/.config/godot/$f" <<EOT
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/android_sdk_path = "$SDK"
+          export/android/java_sdk_path = "$JAVA_DIR"
+          export/android/debug_keystore = "$KS"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
+          export/android/shutdown_adb_on_exit = true
+          EOT
+              sed -i 's/^          //' "/root/.config/godot/$f"
+            fi
+          done
+
+      - name: Export APK
+        shell: bash
+        run: |
+          export HOME=/root
+          mkdir -p "$GITHUB_WORKSPACE/build"
+          cd "$PROJECT_DIR"
+          godot --headless --verbose --import || true
+          godot --headless --verbose --export-debug "Android" "$GITHUB_WORKSPACE/build/TeenPattiRoyale.apk"
+          ls -la "$GITHUB_WORKSPACE/build"
+          test -s "$GITHUB_WORKSPACE/build/TeenPattiRoyale.apk"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Teen Patti Royale v1.0.${{ github.run_number }}
+          body: "Offline Teen Patti (virtual coins only). Download TeenPattiRoyale.apk below and install."
+          files: build/TeenPattiRoyale.apk
+          make_latest: true
