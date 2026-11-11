@@ -53,29 +53,28 @@ jobs:
         run: |
           export HOME=/root
           mkdir -p /root/.config/godot /root/.local/share/godot/export_templates
-          ls /root/.local/share/godot/export_templates || true
-          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/lib/android-sdk}}"
-          JAVA_DIR="${JAVA_HOME:-$(dirname "$(dirname "$(readlink -f "$(which javac || which java)")")")}"
+          SDK=""
+          for c in "$ANDROID_HOME" "$ANDROID_SDK_ROOT" /usr/lib/android-sdk /opt/android-sdk /usr/local/lib/android/sdk /root/android-sdk; do
+            if [ -n "$c" ] && [ -d "$c" ]; then SDK="$c"; break; fi
+          done
+          JAVA_DIR=""
+          for c in "$JAVA_HOME" /usr/lib/jvm/java-17-openjdk-amd64 /usr/lib/jvm/java-17-openjdk /usr/lib/jvm/*17* /usr/lib/jvm/*; do
+            if [ -n "$c" ] && [ -x "$c/bin/javac" ]; then JAVA_DIR="$c"; break; fi
+          done
+          if [ -z "$JAVA_DIR" ]; then
+            JAVA_DIR="$(dirname "$(dirname "$(readlink -f "$(which javac)")")")"
+          fi
+          echo "SDK=$SDK"
+          echo "JAVA=$JAVA_DIR"
+          ls "$SDK" || true
           KS=/root/debug.keystore
           if [ ! -f "$KS" ]; then
             keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android -keystore "$KS" -storepass android -dname "CN=Android Debug,O=Android,C=US" -validity 9999 -deststoretype pkcs12
           fi
           for f in editor_settings-4.tres editor_settings-4.2.tres; do
-            if ! grep -qs "android_sdk_path" "/root/.config/godot/$f"; then
-              cat > "/root/.config/godot/$f" <<EOT
-          [gd_resource type="EditorSettings" format=3]
-
-          [resource]
-          export/android/android_sdk_path = "$SDK"
-          export/android/java_sdk_path = "$JAVA_DIR"
-          export/android/debug_keystore = "$KS"
-          export/android/debug_keystore_user = "androiddebugkey"
-          export/android/debug_keystore_pass = "android"
-          export/android/shutdown_adb_on_exit = true
-          EOT
-              sed -i 's/^          //' "/root/.config/godot/$f"
-            fi
+            printf '[gd_resource type="EditorSettings" format=3]\n\n[resource]\nexport/android/android_sdk_path = "%s"\nexport/android/java_sdk_path = "%s"\nexport/android/debug_keystore = "%s"\nexport/android/debug_keystore_user = "androiddebugkey"\nexport/android/debug_keystore_pass = "android"\nexport/android/shutdown_adb_on_exit = true\n' "$SDK" "$JAVA_DIR" "$KS" > "/root/.config/godot/$f"
           done
+          cat /root/.config/godot/editor_settings-4.tres
 
       - name: Export APK
         shell: bash
